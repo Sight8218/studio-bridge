@@ -1,5 +1,6 @@
 local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 
 local context = ({...})[1] or {}
@@ -350,6 +351,23 @@ elseif ROLE == "client" then
 	end)
 end
 
+-- Sleeps until isDone() holds or `seconds` pass. It wakes only when `changed` fires, so whoever changes the state
+-- isDone() looks at has to fire it, instead of this loop waking every few milliseconds to look.
+local function waitUntil(changed, isDone, seconds)
+	local deadline = os.clock() + seconds
+	local timer = task.delay(seconds, function()
+		changed:Fire()
+	end)
+
+	while not isDone() and os.clock() < deadline do
+		changed.Event:Wait()
+	end
+
+	pcall(task.cancel, timer)
+
+	return isDone()
+end
+
 local function relayToClient(code, timeout)
 	local player = game:GetService("Players"):GetPlayers()[1]
 
@@ -358,6 +376,7 @@ local function relayToClient(code, timeout)
 	end
 
 	local limit = math.max(RELAY_TIMEOUT, timeout or 0)
+	local changed = Instance.new("BindableEvent")
 	local result
 
 	task.spawn(function()
@@ -366,13 +385,12 @@ local function relayToClient(code, timeout)
 		end)
 
 		result = if ok and type(value) == "table" then value else {ok = false, error = "relay failed: " .. tostring(value), output = {}}
+		changed:Fire()
 	end)
 
-	local deadline = os.clock() + limit
-
-	while not result and os.clock() < deadline do
-		task.wait(0.05)
-	end
+	waitUntil(changed, function()
+		return result ~= nil
+	end, limit)
 
 	return result or {ok = false, error = "the client did not answer within " .. limit .. "s (is the client plugin loaded?)", output = {}}
 end
@@ -435,6 +453,7 @@ local function runCommand(decoded)
 	local startedAt = os.clock()
 	local limit = if type(decoded.timeout) == "number" and decoded.timeout > 0 then decoded.timeout else DEFAULT_COMMAND_TIMEOUT
 	local context = {}
+	local changed = Instance.new("BindableEvent")
 	local finished = false
 	local result
 
@@ -453,13 +472,12 @@ local function runCommand(decoded)
 
 		result = value
 		finished = true
+		changed:Fire()
 	end)
 
-	local deadline = os.clock() + limit
-
-	while not finished and os.clock() < deadline do
-		task.wait(0.05)
-	end
+	waitUntil(changed, function()
+		return finished
+	end, limit)
 
 	if not finished then
 		pcall(task.cancel, worker)
@@ -578,6 +596,7 @@ local function handleSocketMessage(session, raw)
 		session.acknowledged = true
 		session.ready = true
 		socket = session
+		session.changed:Fire()
 	elseif message.type == "command" then
 		acceptCommand(message, session)
 	elseif message.type == "result_ack" then
@@ -598,30 +617,29 @@ local function runSocketSession()
 		return false, tostring(client)
 	end
 
-	local session = {client = client, opened = false, closed = false, acknowledged = false, ready = false}
+	local session = {client = client, changed = Instance.new("BindableEvent"), opened = false, closed = false, acknowledged = false, ready = false}
 
 	client.Opened:Connect(function()
 		session.opened = true
+		session.changed:Fire()
 	end)
 	client.Closed:Connect(function()
 		session.closed = true
+		session.changed:Fire()
 	end)
 	client.Error:Connect(function(status, message)
 		session.closed = true
 		session.problem = tostring(status) .. " " .. tostring(message)
+		session.changed:Fire()
 	end)
 	client.MessageReceived:Connect(function(raw)
 		handleSocketMessage(session, raw)
 	end)
 
 	local function waitFor(condition)
-		local deadline = os.clock() + OPEN_TIMEOUT
-
-		while not condition() and not session.closed and os.clock() < deadline do
-			task.wait(0.05)
-		end
-
-		return condition()
+		return waitUntil(session.changed, function()
+			return condition() or session.closed
+		end, OPEN_TIMEOUT) and condition()
 	end
 
 	local function endSession(problem)
@@ -672,9 +690,12 @@ local function runSocketSession()
 	local nextBeat = os.clock() + HEARTBEAT_SECONDS
 
 	while not session.closed and not stopped do
-		task.wait(0.25)
+		-- Sleep until the next heartbeat is due, or until the session closes or the plugin stops.
+		waitUntil(session.changed, function()
+			return session.closed or stopped
+		end, math.max(nextBeat - os.clock(), 0))
 
-		if os.clock() >= nextBeat then
+		if not session.closed and not stopped and os.clock() >= nextBeat then
 			nextBeat = os.clock() + HEARTBEAT_SECONDS
 
 			if not sendJson(session, {type = "heartbeat"}) then
@@ -742,7 +763,7 @@ local GOOD = Color3.fromRGB(80, 200, 120)
 local GOLD = Color3.fromRGB(255, 209, 102)
 local WARN = Color3.fromRGB(230, 180, 60)
 local BAD = Color3.fromRGB(230, 90, 90)
-local PAGES = {"Status", "Tools", "Pro", "Config", "Log"}
+local PAGES = {"Status", "Tools", "Pro", "Log"}
 local STATES = {
 	connected = {"Connected", GOOD},
 	connecting = {"Connecting", WARN},
@@ -905,6 +926,61 @@ local function buildStatusWidget()
 		return made
 	end
 
+	local HOVER_TWEEN = TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+	-- Text that grows a little and lights up while the pointer is over its button, so it is clear it can be pressed.
+	-- Buttons get a soft white halo behind the text; plain labels (recolor) turn white instead. recolor can also be a
+	-- function that returns the color to settle back to, for text that is repainted while the pointer is over it.
+	local function hoverable(hit, text, recolor)
+		local base = text.TextSize
+		local halo
+		local resting
+
+		if text:IsA("TextButton") then
+			halo = create("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(255, 255, 255), BackgroundTransparency = 1, BorderSizePixel = 0, Active = false}, text)
+
+			rounded(halo, 8)
+		end
+
+		local function settle()
+			TweenService:Create(text, HOVER_TWEEN, {TextSize = base}):Play()
+
+			if recolor then
+				local color = if type(recolor) == "function" then recolor() else resting
+
+				if color then
+					TweenService:Create(text, HOVER_TWEEN, {TextColor3 = color}):Play()
+				end
+			end
+
+			resting = nil
+
+			if halo then
+				TweenService:Create(halo, HOVER_TWEEN, {BackgroundTransparency = 1}):Play()
+			end
+		end
+
+		hit.MouseEnter:Connect(function()
+			resting = resting or text.TextColor3
+			TweenService:Create(text, HOVER_TWEEN, {TextSize = base + 2}):Play()
+
+			if recolor then
+				TweenService:Create(text, HOVER_TWEEN, {TextColor3 = Color3.fromRGB(255, 255, 255)}):Play()
+			end
+
+			if halo then
+				TweenService:Create(halo, HOVER_TWEEN, {BackgroundTransparency = 0.85}):Play()
+			end
+		end)
+		hit.MouseLeave:Connect(settle)
+		-- No leave event arrives when the window is hidden under the pointer, so settle then as well.
+		widget:GetPropertyChangedSignal("Enabled"):Connect(function()
+			if not widget.Enabled then
+				settle()
+			end
+		end)
+	end
+
 	local root = create("Frame", {Size = UDim2.fromScale(1, 1), BorderSizePixel = 0}, widget)
 
 	onTheme(function()
@@ -916,15 +992,46 @@ local function buildStatusWidget()
 
 	rounded(logo, 10)
 
-	local title = label(header, {Position = UDim2.fromOffset(64, 10), Size = UDim2.new(1, -262, 0, 24), Font = Enum.Font.BuilderSansBold, TextSize = 20, Text = "Studio Bridge"})
-	local subtitle = label(header, {Position = UDim2.fromOffset(64, 34), Size = UDim2.new(1, -262, 0, 18), TextSize = 13})
-	local pill = create("Frame", {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0, 32), Size = UDim2.fromOffset(176, 28), BorderSizePixel = 0}, header)
+	local title = label(header, {Position = UDim2.fromOffset(64, 10), Size = UDim2.new(1, -306, 0, 24), Font = Enum.Font.BuilderSansBold, TextSize = 20, Text = "Studio Bridge"})
+	local subtitle = label(header, {Position = UDim2.fromOffset(64, 34), Size = UDim2.new(1, -306, 0, 18), TextSize = 13})
+	local pill = create("Frame", {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -58, 0, 32), Size = UDim2.fromOffset(176, 28), BorderSizePixel = 0}, header)
 
 	rounded(pill, 14)
 
 	local dot = create("Frame", {Position = UDim2.fromOffset(12, 9), Size = UDim2.fromOffset(10, 10), BorderSizePixel = 0}, pill)
 
 	rounded(dot, 5)
+
+	-- The settings gear from OPNduck (Tabler "settings"): a wavy ring around a smaller ring. Roblox cannot draw the
+	-- SVG path without an uploaded image, so it is built from circles, fitted to the original shape on a 24 unit grid.
+	local COG_UNIT = 1.25
+	local cogButton = create("TextButton", {AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -14, 0, 32), Size = UDim2.fromOffset(32, 32), BackgroundTransparency = 1, AutoButtonColor = false, Text = ""}, header)
+	local cog = create("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(24 * COG_UNIT, 24 * COG_UNIT), BackgroundTransparency = 1}, cogButton)
+	local cogInk = {}
+	local cogCutout = {}
+
+	local function cogDisc(radius, offsetX, offsetY, group)
+		local disc = create("Frame", {AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, offsetX * COG_UNIT, 0.5, offsetY * COG_UNIT), Size = UDim2.fromOffset(radius * 2 * COG_UNIT, radius * 2 * COG_UNIT), BorderSizePixel = 0}, cog)
+
+		rounded(disc, radius * COG_UNIT)
+		table.insert(group, disc)
+	end
+
+	-- Eight lobes around a body: the outer shape in ink, then the inner one cut out in the page color.
+	local function cogShape(body, lobe, lobeDistance, group)
+		cogDisc(body, 0, 0, group)
+
+		for step = 0, 7 do
+			local angle = math.rad(step * 45)
+
+			cogDisc(lobe, math.sin(angle) * lobeDistance, -math.cos(angle) * lobeDistance, group)
+		end
+	end
+
+	cogShape(8.2, 2.6, 7.5, cogInk)
+	cogShape(6.4, 0.8, 7.2, cogCutout)
+	cogDisc(4, 0, 0, cogInk)
+	cogDisc(2, 0, 0, cogCutout)
 
 	local pillText = label(pill, {Position = UDim2.fromOffset(28, 0), Size = UDim2.new(1, -34, 1, 0), Font = Enum.Font.BuilderSansBold, TextSize = 13})
 
@@ -955,6 +1062,20 @@ local function buildStatusWidget()
 	local toolsPage
 	local proPage
 
+	local cogHovered = false
+
+	local function paintCog()
+		local tint = if cogHovered then Color3.fromRGB(255, 255, 255) elseif selected == "Config" then ACCENT else dimText()
+
+		for _, part in cogInk do
+			part.BackgroundColor3 = tint
+		end
+
+		for _, part in cogCutout do
+			part.BackgroundColor3 = background()
+		end
+	end
+
 	local function paintTabs()
 		for name, entry in tabs do
 			local active = name == selected
@@ -962,9 +1083,135 @@ local function buildStatusWidget()
 			entry.button.TextColor3 = if active then mainText() else dimText()
 			entry.underline.BackgroundColor3 = ACCENT
 			entry.underline.Visible = active
-			pages[name].Visible = active
+		end
+
+		for name, page in pages do
+			page.Visible = name == selected
+		end
+
+		paintCog()
+	end
+
+	local function openPage(name)
+		selected = name
+		paintTabs()
+
+		if name == "Tools" then
+			toolsPage.CanvasPosition = Vector2.zero
+			loadProfile()
+		elseif name == "Pro" then
+			loadPro()
+		elseif name == "Config" then
+			loadConfig()
 		end
 	end
+
+	-- A veil in the page color sits over the content and fades in, the page is swapped underneath, then it fades out.
+	local veil = create("Frame", {Position = UDim2.fromOffset(0, 100), Size = UDim2.new(1, 0, 1, -100), BorderSizePixel = 0, BackgroundTransparency = 1, Active = false, ZIndex = 10}, root)
+	local switchId = 0
+
+	onTheme(function()
+		veil.BackgroundColor3 = background()
+	end)
+
+	-- The page that will be showing once the fade finishes; `selected` only changes halfway through it.
+	local targetPage = selected
+
+	local function selectPage(name)
+		targetPage = name
+		switchId += 1
+
+		local id = switchId
+
+		task.spawn(function()
+			local fadeOut = TweenService:Create(veil, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {BackgroundTransparency = 0})
+
+			fadeOut:Play()
+			fadeOut.Completed:Wait()
+
+			if id ~= switchId then
+				return
+			end
+
+			-- The page is swapped inside pcall so an error while loading it cannot leave the veil covering the content.
+			local ok, err = pcall(openPage, name)
+
+			if not ok then
+				warn("Studio Bridge could not open the " .. name .. " page: " .. tostring(err))
+			end
+
+			TweenService:Create(veil, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundTransparency = 1}):Play()
+		end)
+	end
+
+	-- The same easing OPNduck gives its settings gear: cubic-bezier(0.5, 0, 0.2, 1) over 0.9 seconds, one full turn.
+	local function cubicBezier(x1, y1, x2, y2)
+		local function sample(a, b, t)
+			local inverse = 1 - t
+
+			return 3 * a * inverse * inverse * t + 3 * b * inverse * t * t + t * t * t
+		end
+
+		return function(progress)
+			local low, high = 0, 1
+
+			for _ = 1, 24 do
+				local middle = (low + high) / 2
+
+				if sample(x1, x2, middle) < progress then
+					low = middle
+				else
+					high = middle
+				end
+			end
+
+			return sample(y1, y2, (low + high) / 2)
+		end
+	end
+
+	local COG_SPIN_SECONDS = 0.9
+	local cogEase = cubicBezier(0.5, 0, 0.2, 1)
+	local cogSpin
+
+	local function spinCog()
+		if cogSpin then
+			return
+		end
+
+		local elapsed = 0
+
+		cogSpin = RunService.Heartbeat:Connect(function(step)
+			elapsed += step
+
+			if elapsed >= COG_SPIN_SECONDS then
+				cog.Rotation = 0
+				cogSpin:Disconnect()
+				cogSpin = nil
+			else
+				cog.Rotation = 360 * cogEase(elapsed / COG_SPIN_SECONDS)
+			end
+		end)
+	end
+
+	cogButton.MouseButton1Click:Connect(function()
+		selectPage(if targetPage == "Config" then "Status" else "Config")
+	end)
+	cogButton.MouseEnter:Connect(function()
+		cogHovered = true
+		paintCog()
+		spinCog()
+	end)
+	cogButton.MouseLeave:Connect(function()
+		cogHovered = false
+		paintCog()
+	end)
+	-- No leave event arrives when the window is hidden under the pointer, so clear the hover then as well.
+	widget:GetPropertyChangedSignal("Enabled"):Connect(function()
+		if not widget.Enabled then
+			cogHovered = false
+			paintCog()
+		end
+	end)
 
 	for index, name in PAGES do
 		local tabButton = create("TextButton", {
@@ -980,34 +1227,17 @@ local function buildStatusWidget()
 
 		rounded(underline, 2)
 		tabs[name] = {button = tabButton, underline = underline}
+		hoverable(tabButton, tabButton, function()
+			return if selected == name then mainText() else dimText()
+		end)
 		tabButton.MouseButton1Click:Connect(function()
-			selected = name
-			paintTabs()
-
-			if name == "Tools" then
-				toolsPage.CanvasPosition = Vector2.zero
-				loadProfile()
-			elseif name == "Pro" then
-				loadPro()
-			elseif name == "Config" then
-				loadConfig()
-			end
+			selectPage(name)
 		end)
 	end
 
 	holder.show = function(name)
-		if tabs[name] then
-			selected = name
-			paintTabs()
-
-			if name == "Tools" then
-				toolsPage.CanvasPosition = Vector2.zero
-				loadProfile()
-			elseif name == "Pro" then
-				loadPro()
-			elseif name == "Config" then
-				loadConfig()
-			end
+		if pages[name] then
+			selectPage(name)
 		end
 	end
 
@@ -1206,6 +1436,7 @@ local function buildStatusWidget()
 			create("UIPadding", {PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14)}, chip)
 
 			if not locked then
+				hoverable(chip, chip)
 				chip.MouseButton1Click:Connect(function()
 					applyProfile(preset.profile)
 				end)
@@ -1242,7 +1473,7 @@ local function buildStatusWidget()
 
 			rounded(knob, 8)
 
-			label(row, {
+			local groupTitle = label(row, {
 				Position = UDim2.fromOffset(68, 8),
 				Size = UDim2.new(1, -80, 0, 20),
 				Font = Enum.Font.BuilderSansBold,
@@ -1262,6 +1493,7 @@ local function buildStatusWidget()
 			})
 
 			if not isCore and not locked then
+				hoverable(row, groupTitle, true)
 				track.MouseButton1Click:Connect(function()
 					toggleGroup(group.name)
 				end)
@@ -1322,10 +1554,12 @@ local function buildStatusWidget()
 		Text = "",
 	}, keyCard)
 	local activateButton = create("TextButton", {LayoutOrder = 4, Size = UDim2.new(1, 0, 0, 38), BorderSizePixel = 0, AutoButtonColor = true, Font = Enum.Font.BuilderSansBold, TextSize = 15, Text = "Activate"}, proPage)
+	hoverable(activateButton, activateButton)
 
 	rounded(activateButton, 8)
 
 	local buyButton = create("TextButton", {LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 34), BorderSizePixel = 0, AutoButtonColor = true, Font = Enum.Font.BuilderSansBold, TextSize = 14, Text = "Buy a license"}, proPage)
+	hoverable(buyButton, buyButton)
 
 	rounded(buyButton, 8)
 
@@ -1337,6 +1571,7 @@ local function buildStatusWidget()
 
 	local proStatusText = label(proStatusCard, {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextSize = 13, TextWrapped = true, TextTruncate = Enum.TextTruncate.None, TextYAlignment = Enum.TextYAlignment.Top})
 	local removeButton = create("TextButton", {LayoutOrder = 8, Size = UDim2.new(1, 0, 0, 32), BorderSizePixel = 0, AutoButtonColor = true, Font = Enum.Font.BuilderSans, TextSize = 13, Text = "Remove the license from this computer", Visible = false}, proPage)
+	hoverable(removeButton, removeButton)
 
 	rounded(removeButton, 8)
 
@@ -1518,6 +1753,20 @@ local function buildStatusWidget()
 	local configBusy = false
 	local renderConfig
 
+	local doctorButton = create("TextButton", {LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 38), BorderSizePixel = 0, AutoButtonColor = true, Font = Enum.Font.BuilderSansBold, TextSize = 15, Text = "Run doctor"}, configPage)
+
+	rounded(doctorButton, 8)
+	hoverable(doctorButton, doctorButton)
+
+	local doctorOutput = label(configPage, {LayoutOrder = 6, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Font = Enum.Font.Code, TextSize = 12, TextWrapped = true, TextTruncate = Enum.TextTruncate.None, RichText = false, TextYAlignment = Enum.TextYAlignment.Top, Visible = false})
+	local doctorRunning = false
+
+	onTheme(function()
+		doctorButton.BackgroundColor3 = ACCENT
+		doctorButton.TextColor3 = ON_ACCENT
+		doctorOutput.TextColor3 = mainText()
+	end)
+
 	local function configSwitches(data)
 		local source = if data.updateMode == "source" then " This copy runs from source, so it cannot update itself." else ""
 
@@ -1612,7 +1861,7 @@ local function buildStatusWidget()
 				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
 			}, track)
 			rounded(track:FindFirstChildOfClass("Frame"), 8)
-			label(row, {Position = UDim2.fromOffset(68, 8), Size = UDim2.new(1, -80, 0, 20), Font = Enum.Font.BuilderSansBold, TextSize = 15, TextColor3 = mainText(), Text = switch.title})
+			local rowTitle = label(row, {Position = UDim2.fromOffset(68, 8), Size = UDim2.new(1, -80, 0, 20), Font = Enum.Font.BuilderSansBold, TextSize = 15, TextColor3 = mainText(), Text = switch.title})
 			label(row, {
 				Position = UDim2.fromOffset(68, 30),
 				Size = UDim2.new(1, -80, 0, 48),
@@ -1623,6 +1872,7 @@ local function buildStatusWidget()
 				TextYAlignment = Enum.TextYAlignment.Top,
 				Text = switch.text,
 			})
+			hoverable(row, rowTitle, true)
 			track.MouseButton1Click:Connect(function()
 				if switch.key == "packTrust" then
 					setConfig(switch.key, if switch.on then "all" else "verified")
@@ -1656,6 +1906,7 @@ local function buildStatusWidget()
 		}, toolsRow)
 
 		rounded(openTools, 12)
+		hoverable(openTools, openTools)
 		openTools.MouseButton1Click:Connect(function()
 			holder.show("Tools")
 		end)
@@ -1667,6 +1918,25 @@ local function buildStatusWidget()
 
 	table.insert(themed, function()
 		renderConfig()
+	end)
+
+	doctorButton.MouseButton1Click:Connect(function()
+		if doctorRunning then
+			return
+		end
+
+		doctorRunning = true
+		doctorButton.Text = "Running doctor..."
+
+		task.spawn(function()
+			local ok, response = post("/doctor", {})
+			local decoded = decodeBody(ok, response)
+
+			doctorOutput.Text = if decoded and decoded.output then decoded.output else "Doctor could not run: " .. ((decoded and decoded.error) or "the bridge did not answer")
+			doctorOutput.Visible = true
+			doctorButton.Text = "Run doctor"
+			doctorRunning = false
+		end)
 	end)
 
 	loadConfig = function()
@@ -1719,19 +1989,26 @@ local function buildStatusWidget()
 
 	local shownLog = -1
 
+	-- Studio redoes text layout for every property write, even when the value is the same, and this runs once a second.
+	local function setIfChanged(object, property, value)
+		if object[property] ~= value then
+			object[property] = value
+		end
+	end
+
 	local function refresh()
 		local state = STATES[status.state] or STATES.offline
 
-		dot.BackgroundColor3 = state[2]
-		pillText.Text = state[1] .. (if status.state == "connected" and status.transport then "  ·  " .. status.transport else "")
-		subtitle.Text = (if profileData and profileData.version then "bridge v" .. profileData.version .. "  ·  " else "") .. ROLE .. " window"
-		commandsValue.Text = tostring(status.commands)
-		failedValue.Text = tostring(status.failures)
-		failedValue.TextColor3 = if status.failures > 0 then BAD else mainText()
-		lastValue.Text = status.lastCommand or "none yet"
-		lastCaption.Text = if status.lastCommand then "last command  ·  " .. elapsed(math.floor(os.clock() - status.lastCommandAt)) .. " ago" else "last command"
-		uptimeValue.Text = elapsed(math.floor(os.clock() - status.startedAt))
-		infoLabel.Text = if status.detail ~= "" then status.detail else "Commands from your AI assistant run here. Open the Tools tab to choose which tool groups it can use."
+		setIfChanged(dot, "BackgroundColor3", state[2])
+		setIfChanged(pillText, "Text", state[1] .. (if status.state == "connected" and status.transport then "  ·  " .. status.transport else ""))
+		setIfChanged(subtitle, "Text", (if profileData and profileData.version then "bridge v" .. profileData.version .. "  ·  " else "") .. ROLE .. " window")
+		setIfChanged(commandsValue, "Text", tostring(status.commands))
+		setIfChanged(failedValue, "Text", tostring(status.failures))
+		setIfChanged(failedValue, "TextColor3", if status.failures > 0 then BAD else mainText())
+		setIfChanged(lastValue, "Text", status.lastCommand or "none yet")
+		setIfChanged(lastCaption, "Text", if status.lastCommand then "last command  ·  " .. elapsed(math.floor(os.clock() - status.lastCommandAt)) .. " ago" else "last command")
+		setIfChanged(uptimeValue, "Text", elapsed(math.floor(os.clock() - status.startedAt)))
+		setIfChanged(infoLabel, "Text", if status.detail ~= "" then status.detail else "Commands from your AI assistant run here. Open the Tools tab to choose which tool groups it can use.")
 
 		if #status.log ~= shownLog then
 			shownLog = #status.log
@@ -1798,6 +2075,7 @@ local function stop()
 
 	if session then
 		session.closed = true
+		session.changed:Fire()
 
 		pcall(function()
 			session.client:Close()
