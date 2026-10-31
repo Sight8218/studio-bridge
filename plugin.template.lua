@@ -954,6 +954,16 @@ local function buildStatusWidget()
 	local loadConfig
 	local toolsPage
 	local proPage
+	local builders = {}
+
+	local function ensurePage(name)
+		local build = builders[name]
+
+		if build then
+			builders[name] = nil
+			build()
+		end
+	end
 
 	local function paintTabs()
 		for name, entry in tabs do
@@ -962,7 +972,9 @@ local function buildStatusWidget()
 			entry.button.TextColor3 = if active then mainText() else dimText()
 			entry.underline.BackgroundColor3 = ACCENT
 			entry.underline.Visible = active
-			pages[name].Visible = active
+			if pages[name] then
+				pages[name].Visible = active
+			end
 		end
 	end
 
@@ -981,6 +993,7 @@ local function buildStatusWidget()
 		rounded(underline, 2)
 		tabs[name] = {button = tabButton, underline = underline}
 		tabButton.MouseButton1Click:Connect(function()
+			ensurePage(name)
 			selected = name
 			paintTabs()
 
@@ -997,6 +1010,7 @@ local function buildStatusWidget()
 
 	holder.show = function(name)
 		if tabs[name] then
+			ensurePage(name)
 			selected = name
 			paintTabs()
 
@@ -1290,398 +1304,406 @@ local function buildStatusWidget()
 		end)
 	end
 
-	proPage = create("ScrollingFrame", {
-		Size = UDim2.fromScale(1, 1),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ScrollBarThickness = 6,
-		AutomaticCanvasSize = Enum.AutomaticSize.Y,
-		CanvasSize = UDim2.new(),
-	}, content)
-
-	pages.Pro = proPage
-	create("UIPadding", {PaddingTop = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 20)}, proPage)
-	create("UIListLayout", {Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder}, proPage)
-
-	local proTitle = label(proPage, {LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 26), Font = Enum.Font.BuilderSansBold, TextSize = 20, Text = 'Studio Bridge  <font color="#ffd166"><b>PRO</b></font>'})
-	local proIntro = label(proPage, {LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextSize = 13, TextWrapped = true, TextTruncate = Enum.TextTruncate.None, Text = "Paste your license key to download and unlock the paid packs. The key is saved on this computer only."})
-	local keyCard = create("Frame", {LayoutOrder = 3, Size = UDim2.new(1, 0, 0, 40), BorderSizePixel = 0}, proPage)
-
-	rounded(keyCard, 8)
-
-	local keyBox = create("TextBox", {
-		Position = UDim2.fromOffset(12, 0),
-		Size = UDim2.new(1, -24, 1, 0),
-		BackgroundTransparency = 1,
-		ClearTextOnFocus = false,
-		Font = Enum.Font.RobotoMono,
-		TextSize = 13,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		PlaceholderText = "Paste your license key here",
-		Text = "",
-	}, keyCard)
-	local activateButton = create("TextButton", {LayoutOrder = 4, Size = UDim2.new(1, 0, 0, 38), BorderSizePixel = 0, AutoButtonColor = true, Font = Enum.Font.BuilderSansBold, TextSize = 15, Text = "Activate"}, proPage)
-
-	rounded(activateButton, 8)
-
-	local buyButton = create("TextButton", {LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 34), BorderSizePixel = 0, AutoButtonColor = true, Font = Enum.Font.BuilderSansBold, TextSize = 14, Text = "Buy a license"}, proPage)
-
-	rounded(buyButton, 8)
-
-	local proMessage = label(proPage, {LayoutOrder = 6, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextSize = 13, TextWrapped = true, TextTruncate = Enum.TextTruncate.None})
-	local proStatusCard = create("Frame", {LayoutOrder = 7, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BorderSizePixel = 0}, proPage)
-
-	rounded(proStatusCard, 10)
-	create("UIPadding", {PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14)}, proStatusCard)
-
-	local proStatusText = label(proStatusCard, {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextSize = 13, TextWrapped = true, TextTruncate = Enum.TextTruncate.None, TextYAlignment = Enum.TextYAlignment.Top})
-	local removeButton = create("TextButton", {LayoutOrder = 8, Size = UDim2.new(1, 0, 0, 32), BorderSizePixel = 0, AutoButtonColor = true, Font = Enum.Font.BuilderSans, TextSize = 13, Text = "Remove the license from this computer", Visible = false}, proPage)
-
-	rounded(removeButton, 8)
-
-	local proData
-	local proBusy = false
-
 	local function plain(text)
 		return (string.gsub(string.gsub(string.gsub(tostring(text), "&", "&amp;"), "<", "&lt;"), ">", "&gt;"))
 	end
 
-	local trustNames = {official = "official", pro = "official Pro"}
+	local function buildProPage()
+		proPage = create("ScrollingFrame", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 6,
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			CanvasSize = UDim2.new(),
+		}, content)
 
-	local function renderPro()
-		if not proData then
-			proStatusText.Text = "Checking this computer..."
-			removeButton.Visible = false
+		pages.Pro = proPage
+		create("UIPadding", {PaddingTop = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 20)}, proPage)
+		create("UIListLayout", {Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder}, proPage)
 
-			return
-		end
+		local proTitle = label(proPage, {LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 26), Font = Enum.Font.BuilderSansBold, TextSize = 20, Text = 'Studio Bridge  <font color="#ffd166"><b>PRO</b></font>'})
+		local proIntro = label(proPage, {LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextSize = 13, TextWrapped = true, TextTruncate = Enum.TextTruncate.None, Text = "Paste your license key to download and unlock the paid packs. The key is saved on this computer only."})
+		local keyCard = create("Frame", {LayoutOrder = 3, Size = UDim2.new(1, 0, 0, 40), BorderSizePixel = 0}, proPage)
 
-		if proData.hasKey then
-			local packs = {}
+		rounded(keyCard, 8)
 
-			for _, pack in proData.packs or {} do
-				table.insert(packs, string.format("%s %s  (%s)", plain(pack.title), plain(pack.version), trustNames[pack.trust] or "unverified third-party"))
+		local keyBox = create("TextBox", {
+			Position = UDim2.fromOffset(12, 0),
+			Size = UDim2.new(1, -24, 1, 0),
+			BackgroundTransparency = 1,
+			ClearTextOnFocus = false,
+			Font = Enum.Font.RobotoMono,
+			TextSize = 13,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			PlaceholderText = "Paste your license key here",
+			Text = "",
+		}, keyCard)
+		local activateButton = create("TextButton", {LayoutOrder = 4, Size = UDim2.new(1, 0, 0, 38), BorderSizePixel = 0, AutoButtonColor = true, Font = Enum.Font.BuilderSansBold, TextSize = 15, Text = "Activate"}, proPage)
+
+		rounded(activateButton, 8)
+
+		local buyButton = create("TextButton", {LayoutOrder = 5, Size = UDim2.new(1, 0, 0, 34), BorderSizePixel = 0, AutoButtonColor = true, Font = Enum.Font.BuilderSansBold, TextSize = 14, Text = "Buy a license"}, proPage)
+
+		rounded(buyButton, 8)
+
+		local proMessage = label(proPage, {LayoutOrder = 6, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextSize = 13, TextWrapped = true, TextTruncate = Enum.TextTruncate.None})
+		local proStatusCard = create("Frame", {LayoutOrder = 7, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BorderSizePixel = 0}, proPage)
+
+		rounded(proStatusCard, 10)
+		create("UIPadding", {PaddingTop = UDim.new(0, 12), PaddingBottom = UDim.new(0, 12), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 14)}, proStatusCard)
+
+		local proStatusText = label(proStatusCard, {Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextSize = 13, TextWrapped = true, TextTruncate = Enum.TextTruncate.None, TextYAlignment = Enum.TextYAlignment.Top})
+		local removeButton = create("TextButton", {LayoutOrder = 8, Size = UDim2.new(1, 0, 0, 32), BorderSizePixel = 0, AutoButtonColor = true, Font = Enum.Font.BuilderSans, TextSize = 13, Text = "Remove the license from this computer", Visible = false}, proPage)
+
+		rounded(removeButton, 8)
+
+		local proData
+		local proBusy = false
+
+		local trustNames = {official = "official", pro = "official Pro"}
+
+		local function renderPro()
+			if not proData then
+				proStatusText.Text = "Checking this computer..."
+				removeButton.Visible = false
+
+				return
 			end
 
-			proStatusText.Text = string.format(
-				"License  <b>%s</b>\nPlan  %s\nPacks  %s",
-				plain(proData.maskedKey or ""),
-				plain(proData.plan or "not checked yet"),
-				if #packs > 0 then table.concat(packs, ", ") else "none installed"
-			)
-			removeButton.Visible = true
-		else
-			proStatusText.Text = "No license key is saved on this computer."
-			removeButton.Visible = false
-		end
-	end
+			if proData.hasKey then
+				local packs = {}
 
-	local function showProMessage(text, good)
-		proMessage.Text = plain(text)
-		proMessage.TextColor3 = if good then GOOD else BAD
-	end
-
-	onTheme(function()
-		proTitle.TextColor3 = mainText()
-		proIntro.TextColor3 = dimText()
-		keyCard.BackgroundColor3 = card()
-		keyBox.TextColor3 = mainText()
-		keyBox.PlaceholderColor3 = dimText()
-		activateButton.BackgroundColor3 = ACCENT
-		activateButton.TextColor3 = ON_ACCENT
-		buyButton.BackgroundColor3 = card()
-		buyButton.TextColor3 = GOLD
-		proStatusCard.BackgroundColor3 = card()
-		proStatusText.TextColor3 = mainText()
-		removeButton.BackgroundColor3 = card()
-		removeButton.TextColor3 = dimText()
-	end)
-
-	loadPro = function()
-		task.spawn(function()
-			local ok, response = post("/pro", {action = "status"})
-			local decoded = decodeBody(ok, response)
-
-			if decoded and decoded.ok then
-				proData = decoded
-			end
-
-			renderPro()
-		end)
-	end
-
-	activateButton.MouseButton1Click:Connect(function()
-		if proBusy then
-			return
-		end
-
-		local key = string.gsub(keyBox.Text, "%s+", "")
-
-		if key == "" then
-			showProMessage("Paste your license key first.", false)
-
-			return
-		end
-
-		proBusy = true
-		activateButton.Text = "Activating..."
-		showProMessage("", true)
-
-		task.spawn(function()
-			local ok, response = post("/pro", {action = "activate", key = key})
-			local decoded = decodeBody(ok, response)
-
-			proBusy = false
-			activateButton.Text = "Activate"
-
-			if decoded and decoded.status then
-				proData = decoded.status
-				proData.ok = true
-			end
-
-			if decoded and decoded.ok then
-				keyBox.Text = ""
-				showProMessage(decoded.message or "License accepted.", true)
-			elseif decoded then
-				showProMessage(decoded.message or "The license could not be activated.", false)
-			else
-				showProMessage("Could not reach the Studio Bridge program. Check that your AI tool has started it.", false)
-			end
-
-			renderPro()
-		end)
-	end)
-
-	buyButton.MouseButton1Click:Connect(function()
-		task.spawn(function()
-			local ok, response = post("/pro", {action = "buy"})
-			local decoded = decodeBody(ok, response)
-
-			if decoded and decoded.message then
-				showProMessage(decoded.message, decoded.ok == true)
-			elseif decoded then
-				showProMessage("This Studio Bridge program is older than the plugin and cannot open the license page. Restart your AI tool to update it.", false)
-			else
-				showProMessage("Could not reach the Studio Bridge program. Check that your AI tool has started it.", false)
-			end
-		end)
-	end)
-
-	removeButton.MouseButton1Click:Connect(function()
-		if proBusy then
-			return
-		end
-
-		proBusy = true
-		removeButton.Text = "Removing..."
-
-		task.spawn(function()
-			local ok, response = post("/pro", {action = "remove"})
-			local decoded = decodeBody(ok, response)
-
-			proBusy = false
-			removeButton.Text = "Remove the license from this computer"
-
-			if decoded and decoded.status then
-				proData = decoded.status
-				proData.ok = true
-			end
-
-			showProMessage(if decoded then (decoded.message or "License removed.") else "Could not reach the Studio Bridge program.", decoded ~= nil and decoded.ok == true)
-			renderPro()
-		end)
-	end)
-
-	local configPage = create("ScrollingFrame", {
-		Size = UDim2.fromScale(1, 1),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ScrollBarThickness = 6,
-		AutomaticCanvasSize = Enum.AutomaticSize.Y,
-		CanvasSize = UDim2.new(),
-	}, content)
-
-	pages.Config = configPage
-	create("UIPadding", {PaddingTop = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 20)}, configPage)
-	create("UIListLayout", {Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder}, configPage)
-
-	local configTitle = label(configPage, {LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 26), Font = Enum.Font.BuilderSansBold, TextSize = 20, Text = "Config"})
-	local configIntro = label(configPage, {LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextSize = 13, TextWrapped = true, TextTruncate = Enum.TextTruncate.None, Text = "Switch these here instead of asking your AI. They are saved on this computer."})
-	local configMessage = label(configPage, {LayoutOrder = 3, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextSize = 13, TextWrapped = true, TextTruncate = Enum.TextTruncate.None})
-	local configRows = create("Frame", {LayoutOrder = 4, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1}, configPage)
-
-	create("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, configRows)
-
-	local configData = nil
-	local configNote = ""
-	local configBusy = false
-	local renderConfig
-
-	local function configSwitches(data)
-		local source = if data.updateMode == "source" then " This copy runs from source, so it cannot update itself." else ""
-
-		return {
-			{key = "checkUpdates", title = "Check for updates", text = "Look for a newer release once a day when the bridge starts. Nothing is downloaded.", on = data.checkUpdates},
-			{key = "autoUpdate", title = "Install updates automatically", text = "Download, verify and install new releases yourself. They take effect at the next restart." .. source, on = data.autoUpdate},
-			{key = "packTrust", title = "Only load signed packs", text = "On: only packs signed by Studio Bridge load. Off: unsigned third-party packs load too, labeled unverified.", on = data.packTrust == "verified"},
-		}
-	end
-
-	local function setConfig(key, value)
-		if configBusy then
-			return
-		end
-
-		configBusy = true
-		configNote = "Saving..."
-		renderConfig()
-
-		task.spawn(function()
-			local ok, response = post("/settings", {action = "set", name = key, value = value})
-			local decoded = decodeBody(ok, response)
-
-			configBusy = false
-
-			if decoded and decoded.packTrust then
-				configData = decoded
-				configNote = if key == "packTrust" then "Saved. Your AI client may need /mcp to refresh its tool list." else "Saved."
-			elseif decoded and decoded.error then
-				configNote = "Not saved: " .. decoded.error
-			else
-				configNote = "Not saved: the bridge did not answer. If your AI tool was just updated, restart it."
-			end
-
-			renderConfig()
-		end)
-	end
-
-	renderConfig = function()
-		local keepScroll = configPage.CanvasPosition
-
-		clearChildren(configRows)
-
-		configTitle.TextColor3 = mainText()
-		configIntro.TextColor3 = dimText()
-		configMessage.TextColor3 = dimText()
-
-		if not configData then
-			configMessage.Text = if configNote ~= "" then configNote else "Waiting for the bridge..."
-
-			return
-		end
-
-		local notes = {}
-
-		if configNote ~= "" then
-			table.insert(notes, configNote)
-		end
-
-		if configData.unreadable then
-			table.insert(notes, "The settings file could not be read, so only signed packs are loaded. Saving a switch keeps a copy of the broken file and replaces it.")
-		end
-
-		if configData.update and configData.update.applied then
-			table.insert(notes, string.format("Studio Bridge %s was installed. Restart your AI tool to use it.", plain(configData.update.applied)))
-		elseif configData.update and configData.update.newer then
-			table.insert(notes, string.format("Update available: %s (you have %s). Ask your AI to run bridge_update, or run studio-bridge update.", plain(configData.update.tag), plain(configData.version)))
-		end
-
-		configMessage.Text = table.concat(notes, "\n")
-
-		for index, switch in configSwitches(configData) do
-			local row = create("Frame", {LayoutOrder = index, Size = UDim2.new(1, 0, 0, 84), BorderSizePixel = 0, BackgroundColor3 = card()}, configRows)
-
-			rounded(row, 10)
-
-			local track = create("TextButton", {
-				Position = UDim2.fromOffset(14, 31),
-				Size = UDim2.fromOffset(40, 22),
-				BorderSizePixel = 0,
-				AutoButtonColor = false,
-				Text = "",
-				BackgroundColor3 = if switch.on then ACCENT else line(),
-			}, row)
-
-			rounded(track, 11)
-
-			create("Frame", {
-				Position = if switch.on then UDim2.fromOffset(21, 3) else UDim2.fromOffset(3, 3),
-				Size = UDim2.fromOffset(16, 16),
-				BorderSizePixel = 0,
-				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-			}, track)
-			rounded(track:FindFirstChildOfClass("Frame"), 8)
-			label(row, {Position = UDim2.fromOffset(68, 8), Size = UDim2.new(1, -80, 0, 20), Font = Enum.Font.BuilderSansBold, TextSize = 15, TextColor3 = mainText(), Text = switch.title})
-			label(row, {
-				Position = UDim2.fromOffset(68, 30),
-				Size = UDim2.new(1, -80, 0, 48),
-				TextSize = 12,
-				TextColor3 = dimText(),
-				TextWrapped = true,
-				TextTruncate = Enum.TextTruncate.None,
-				TextYAlignment = Enum.TextYAlignment.Top,
-				Text = switch.text,
-			})
-			track.MouseButton1Click:Connect(function()
-				if switch.key == "packTrust" then
-					setConfig(switch.key, if switch.on then "all" else "verified")
-				else
-					setConfig(switch.key, not switch.on)
+				for _, pack in proData.packs or {} do
+					table.insert(packs, string.format("%s %s  (%s)", plain(pack.title), plain(pack.version), trustNames[pack.trust] or "unverified third-party"))
 				end
+
+				proStatusText.Text = string.format(
+					"License  <b>%s</b>\nPlan  %s\nPacks  %s",
+					plain(proData.maskedKey or ""),
+					plain(proData.plan or "not checked yet"),
+					if #packs > 0 then table.concat(packs, ", ") else "none installed"
+				)
+				removeButton.Visible = true
+			else
+				proStatusText.Text = "No license key is saved on this computer."
+				removeButton.Visible = false
+			end
+		end
+
+		local function showProMessage(text, good)
+			proMessage.Text = plain(text)
+			proMessage.TextColor3 = if good then GOOD else BAD
+		end
+
+		onTheme(function()
+			proTitle.TextColor3 = mainText()
+			proIntro.TextColor3 = dimText()
+			keyCard.BackgroundColor3 = card()
+			keyBox.TextColor3 = mainText()
+			keyBox.PlaceholderColor3 = dimText()
+			activateButton.BackgroundColor3 = ACCENT
+			activateButton.TextColor3 = ON_ACCENT
+			buyButton.BackgroundColor3 = card()
+			buyButton.TextColor3 = GOLD
+			proStatusCard.BackgroundColor3 = card()
+			proStatusText.TextColor3 = mainText()
+			removeButton.BackgroundColor3 = card()
+			removeButton.TextColor3 = dimText()
+		end)
+
+		loadPro = function()
+			task.spawn(function()
+				local ok, response = post("/pro", {action = "status"})
+				local decoded = decodeBody(ok, response)
+
+				if decoded and decoded.ok then
+					proData = decoded
+				end
+
+				renderPro()
 			end)
 		end
 
-		local toolsRow = create("Frame", {LayoutOrder = 4, Size = UDim2.new(1, 0, 0, 84), BorderSizePixel = 0, BackgroundColor3 = card()}, configRows)
-
-		rounded(toolsRow, 10)
-		label(toolsRow, {Position = UDim2.fromOffset(14, 8), Size = UDim2.new(1, -28, 0, 20), Font = Enum.Font.BuilderSansBold, TextSize = 15, TextColor3 = mainText(), Text = "Tool groups"})
-		label(toolsRow, {
-			Position = UDim2.fromOffset(14, 30),
-			Size = UDim2.new(1, -28, 0, 20),
-			TextSize = 12,
-			TextColor3 = dimText(),
-			Text = string.format("Offered now: %s%s", plain(configData.profile), if configData.profileLocked then "  ·  fixed by STUDIO_BRIDGE_TOOLS" else ""),
-		})
-
-		local openTools = create("TextButton", {
-			Position = UDim2.fromOffset(14, 52),
-			Size = UDim2.fromOffset(150, 24),
-			BorderSizePixel = 0,
-			BackgroundColor3 = line(),
-			TextColor3 = mainText(),
-			Font = Enum.Font.BuilderSansBold,
-			TextSize = 13,
-			Text = "Open the Tools tab",
-		}, toolsRow)
-
-		rounded(openTools, 12)
-		openTools.MouseButton1Click:Connect(function()
-			holder.show("Tools")
-		end)
-
-		task.defer(function()
-			configPage.CanvasPosition = keepScroll
-		end)
-	end
-
-	table.insert(themed, function()
-		renderConfig()
-	end)
-
-	loadConfig = function()
-		task.spawn(function()
-			local ok, response = post("/settings", {action = "get"})
-			local decoded = decodeBody(ok, response)
-
-			if decoded and decoded.packTrust then
-				configData = decoded
-				configNote = ""
+		activateButton.MouseButton1Click:Connect(function()
+			if proBusy then
+				return
 			end
 
-			renderConfig()
+			local key = string.gsub(keyBox.Text, "%s+", "")
+
+			if key == "" then
+				showProMessage("Paste your license key first.", false)
+
+				return
+			end
+
+			proBusy = true
+			activateButton.Text = "Activating..."
+			showProMessage("", true)
+
+			task.spawn(function()
+				local ok, response = post("/pro", {action = "activate", key = key})
+				local decoded = decodeBody(ok, response)
+
+				proBusy = false
+				activateButton.Text = "Activate"
+
+				if decoded and decoded.status then
+					proData = decoded.status
+					proData.ok = true
+				end
+
+				if decoded and decoded.ok then
+					keyBox.Text = ""
+					showProMessage(decoded.message or "License accepted.", true)
+				elseif decoded then
+					showProMessage(decoded.message or "The license could not be activated.", false)
+				else
+					showProMessage("Could not reach the Studio Bridge program. Check that your AI tool has started it.", false)
+				end
+
+				renderPro()
+			end)
+		end)
+
+		buyButton.MouseButton1Click:Connect(function()
+			task.spawn(function()
+				local ok, response = post("/pro", {action = "buy"})
+				local decoded = decodeBody(ok, response)
+
+				if decoded and decoded.message then
+					showProMessage(decoded.message, decoded.ok == true)
+				elseif decoded then
+					showProMessage("This Studio Bridge program is older than the plugin and cannot open the license page. Restart your AI tool to update it.", false)
+				else
+					showProMessage("Could not reach the Studio Bridge program. Check that your AI tool has started it.", false)
+				end
+			end)
+		end)
+
+		removeButton.MouseButton1Click:Connect(function()
+			if proBusy then
+				return
+			end
+
+			proBusy = true
+			removeButton.Text = "Removing..."
+
+			task.spawn(function()
+				local ok, response = post("/pro", {action = "remove"})
+				local decoded = decodeBody(ok, response)
+
+				proBusy = false
+				removeButton.Text = "Remove the license from this computer"
+
+				if decoded and decoded.status then
+					proData = decoded.status
+					proData.ok = true
+				end
+
+				showProMessage(if decoded then (decoded.message or "License removed.") else "Could not reach the Studio Bridge program.", decoded ~= nil and decoded.ok == true)
+				renderPro()
+			end)
 		end)
 	end
+
+	local function buildConfigPage()
+		local configPage = create("ScrollingFrame", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 6,
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			CanvasSize = UDim2.new(),
+		}, content)
+
+		pages.Config = configPage
+		create("UIPadding", {PaddingTop = UDim.new(0, 14), PaddingBottom = UDim.new(0, 14), PaddingLeft = UDim.new(0, 14), PaddingRight = UDim.new(0, 20)}, configPage)
+		create("UIListLayout", {Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder}, configPage)
+
+		local configTitle = label(configPage, {LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 26), Font = Enum.Font.BuilderSansBold, TextSize = 20, Text = "Config"})
+		local configIntro = label(configPage, {LayoutOrder = 2, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextSize = 13, TextWrapped = true, TextTruncate = Enum.TextTruncate.None, Text = "Switch these here instead of asking your AI. They are saved on this computer."})
+		local configMessage = label(configPage, {LayoutOrder = 3, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, TextSize = 13, TextWrapped = true, TextTruncate = Enum.TextTruncate.None})
+		local configRows = create("Frame", {LayoutOrder = 4, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1}, configPage)
+
+		create("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, configRows)
+
+		local configData = nil
+		local configNote = ""
+		local configBusy = false
+		local renderConfig
+
+		local function configSwitches(data)
+			local source = if data.updateMode == "source" then " This copy runs from source, so it cannot update itself." else ""
+
+			return {
+				{key = "checkUpdates", title = "Check for updates", text = "Look for a newer release once a day when the bridge starts. Nothing is downloaded.", on = data.checkUpdates},
+				{key = "autoUpdate", title = "Install updates automatically", text = "Download, verify and install new releases yourself. They take effect at the next restart." .. source, on = data.autoUpdate},
+				{key = "packTrust", title = "Only load signed packs", text = "On: only packs signed by Studio Bridge load. Off: unsigned third-party packs load too, labeled unverified.", on = data.packTrust == "verified"},
+			}
+		end
+
+		local function setConfig(key, value)
+			if configBusy then
+				return
+			end
+
+			configBusy = true
+			configNote = "Saving..."
+			renderConfig()
+
+			task.spawn(function()
+				local ok, response = post("/settings", {action = "set", name = key, value = value})
+				local decoded = decodeBody(ok, response)
+
+				configBusy = false
+
+				if decoded and decoded.packTrust then
+					configData = decoded
+					configNote = if key == "packTrust" then "Saved. Your AI client may need /mcp to refresh its tool list." else "Saved."
+				elseif decoded and decoded.error then
+					configNote = "Not saved: " .. decoded.error
+				else
+					configNote = "Not saved: the bridge did not answer. If your AI tool was just updated, restart it."
+				end
+
+				renderConfig()
+			end)
+		end
+
+		renderConfig = function()
+			local keepScroll = configPage.CanvasPosition
+
+			clearChildren(configRows)
+
+			configTitle.TextColor3 = mainText()
+			configIntro.TextColor3 = dimText()
+			configMessage.TextColor3 = dimText()
+
+			if not configData then
+				configMessage.Text = if configNote ~= "" then configNote else "Waiting for the bridge..."
+
+				return
+			end
+
+			local notes = {}
+
+			if configNote ~= "" then
+				table.insert(notes, configNote)
+			end
+
+			if configData.unreadable then
+				table.insert(notes, "The settings file could not be read, so only signed packs are loaded. Saving a switch keeps a copy of the broken file and replaces it.")
+			end
+
+			if configData.update and configData.update.applied then
+				table.insert(notes, string.format("Studio Bridge %s was installed. Restart your AI tool to use it.", plain(configData.update.applied)))
+			elseif configData.update and configData.update.newer then
+				table.insert(notes, string.format("Update available: %s (you have %s). Ask your AI to run bridge_update, or run studio-bridge update.", plain(configData.update.tag), plain(configData.version)))
+			end
+
+			configMessage.Text = table.concat(notes, "\n")
+
+			for index, switch in configSwitches(configData) do
+				local row = create("Frame", {LayoutOrder = index, Size = UDim2.new(1, 0, 0, 84), BorderSizePixel = 0, BackgroundColor3 = card()}, configRows)
+
+				rounded(row, 10)
+
+				local track = create("TextButton", {
+					Position = UDim2.fromOffset(14, 31),
+					Size = UDim2.fromOffset(40, 22),
+					BorderSizePixel = 0,
+					AutoButtonColor = false,
+					Text = "",
+					BackgroundColor3 = if switch.on then ACCENT else line(),
+				}, row)
+
+				rounded(track, 11)
+
+				create("Frame", {
+					Position = if switch.on then UDim2.fromOffset(21, 3) else UDim2.fromOffset(3, 3),
+					Size = UDim2.fromOffset(16, 16),
+					BorderSizePixel = 0,
+					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				}, track)
+				rounded(track:FindFirstChildOfClass("Frame"), 8)
+				label(row, {Position = UDim2.fromOffset(68, 8), Size = UDim2.new(1, -80, 0, 20), Font = Enum.Font.BuilderSansBold, TextSize = 15, TextColor3 = mainText(), Text = switch.title})
+				label(row, {
+					Position = UDim2.fromOffset(68, 30),
+					Size = UDim2.new(1, -80, 0, 48),
+					TextSize = 12,
+					TextColor3 = dimText(),
+					TextWrapped = true,
+					TextTruncate = Enum.TextTruncate.None,
+					TextYAlignment = Enum.TextYAlignment.Top,
+					Text = switch.text,
+				})
+				track.MouseButton1Click:Connect(function()
+					if switch.key == "packTrust" then
+						setConfig(switch.key, if switch.on then "all" else "verified")
+					else
+						setConfig(switch.key, not switch.on)
+					end
+				end)
+			end
+
+			local toolsRow = create("Frame", {LayoutOrder = 4, Size = UDim2.new(1, 0, 0, 84), BorderSizePixel = 0, BackgroundColor3 = card()}, configRows)
+
+			rounded(toolsRow, 10)
+			label(toolsRow, {Position = UDim2.fromOffset(14, 8), Size = UDim2.new(1, -28, 0, 20), Font = Enum.Font.BuilderSansBold, TextSize = 15, TextColor3 = mainText(), Text = "Tool groups"})
+			label(toolsRow, {
+				Position = UDim2.fromOffset(14, 30),
+				Size = UDim2.new(1, -28, 0, 20),
+				TextSize = 12,
+				TextColor3 = dimText(),
+				Text = string.format("Offered now: %s%s", plain(configData.profile), if configData.profileLocked then "  ·  fixed by STUDIO_BRIDGE_TOOLS" else ""),
+			})
+
+			local openTools = create("TextButton", {
+				Position = UDim2.fromOffset(14, 52),
+				Size = UDim2.fromOffset(150, 24),
+				BorderSizePixel = 0,
+				BackgroundColor3 = line(),
+				TextColor3 = mainText(),
+				Font = Enum.Font.BuilderSansBold,
+				TextSize = 13,
+				Text = "Open the Tools tab",
+			}, toolsRow)
+
+			rounded(openTools, 12)
+			openTools.MouseButton1Click:Connect(function()
+				holder.show("Tools")
+			end)
+
+			task.defer(function()
+				configPage.CanvasPosition = keepScroll
+			end)
+		end
+
+		table.insert(themed, function()
+			renderConfig()
+		end)
+
+		loadConfig = function()
+			task.spawn(function()
+				local ok, response = post("/settings", {action = "get"})
+				local decoded = decodeBody(ok, response)
+
+				if decoded and decoded.packTrust then
+					configData = decoded
+					configNote = ""
+				end
+
+				renderConfig()
+			end)
+		end
+	end
+
+	-- Pages nobody has opened yet are not built, so the window opens with less to create.
+	builders.Pro = buildProPage
+	builders.Config = buildConfigPage
 
 	local logPage = create("ScrollingFrame", {
 		Size = UDim2.fromScale(1, 1),
